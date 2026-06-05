@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+env/
+
+# Models and Data (Standard practice is to store large weights externally)
+models/*.pth
+models/*.pt
