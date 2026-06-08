@@ -11,3 +11,5 @@ env/
 models/*.pth
 models/*.pt
 asset/
+*.jpg
+*.png
