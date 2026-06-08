@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 2
+names: ['Container Detection - v7 2023-07-12 11-43pm', 'object']
+
+roboflow:
+  workspace: emptycity1995
+  project: containerdetection-76m5b
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/emptycity1995/containerdetection-76m5b/dataset/1

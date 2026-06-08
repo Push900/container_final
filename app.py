@@ -126,6 +126,16 @@ def classify(image: np.ndarray):
         "image_size":    f"{result['quality_metrics'].get('width')}×{result['quality_metrics'].get('height')}",
     }
 
+    # OCR container-number result (step 0 gate)
+    ocr = result.get("ocr_result", {})
+    if ocr:
+        quality_dict["container_number"] = {
+            "found":      ocr.get("found"),
+            "number":     ocr.get("number") or "—",
+            "confidence": ocr.get("confidence"),
+            "status":     ocr.get("message"),
+        }
+
     dm = result.get("depth_metrics", {})
     if dm:
         quality_dict["depth"] = {

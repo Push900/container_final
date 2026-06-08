@@ -21,6 +21,7 @@ Single-image result dict keys:
     quality_issues      list[str]
     quality_metrics     dict
     reasoning           str
+    ocr_result          dict  {found, number, confidence, raw_texts, message}
 
 Multi-image result dict keys:
     final_prediction    str   "EMPTY" | "FULL" | "INVALID" | "NOT_CONTAINER"
@@ -74,6 +75,11 @@ DEPTH_CONFLICT_CONF_GATE = 0.92
 # Multi-image pipeline constants
 CONTAINER_DETECTION_THRESHOLD = 0.80   # YOLO gate for NOT_CONTAINER filter
 TOP_K_IMAGES                  = 3      # number of best images used in ensemble
+
+# OCR container-number gate (step 0, applied before all other logic).
+# Defined here for visibility; actual thresholds live in ocr_validator.py.
+# Set OCR_GATE_ENABLED = False to disable the gate without removing the code.
+OCR_GATE_ENABLED = True
 
 
 # ── Classifier helpers ────────────────────────────────────────────────────────
@@ -379,6 +385,18 @@ class ContainerPredictor:
             logger.warning("ContainerDetector unavailable (%s) — passthrough mode.", exc)
             self.detector = None
 
+        # OCR container-number validation gate (step 0 of the pipeline).
+        # Loaded lazily inside ocr_validator; falls back to passthrough if
+        # easyocr is not installed.
+        print("  Loading OCR validator …", end=" ", flush=True)
+        try:
+            from ocr_validator import validate_container_number  # noqa: PLC0415
+            self._ocr_validate = validate_container_number if OCR_GATE_ENABLED else None
+            print("done" if OCR_GATE_ENABLED else "disabled (OCR_GATE_ENABLED=False)")
+        except Exception as exc:
+            logger.warning("OCR validator unavailable (%s) — OCR gate disabled.", exc)
+            self._ocr_validate = None
+
     # ── Single-image public API (unchanged) ───────────────────────────────────
 
     def predict(self, pil_img: Image.Image) -> dict:
@@ -386,6 +404,44 @@ class ContainerPredictor:
         Analyse a container image and return a result dict (see module docstring).
         """
         result: dict = {}
+
+        # ── Step 0: OCR container-number gate ─────────────────────────────────
+        # Runs on the ORIGINAL image (before any YOLO crop).
+        # Only hard-blocks images that are identified as the container SIDE WALL
+        # (marking panel with TARE / MAX GR keywords).  A "number not found" result
+        # is NOT an early exit — container opening images (interior view) have no
+        # visible number plate, and the YOLO + classifier pipeline already handles
+        # them correctly.  The ocr_result is attached to every downstream return
+        # path for display in the UI quality panel.
+        if self._ocr_validate is not None:
+            ocr = self._ocr_validate(pil_img)
+            if ocr.get("is_marking_panel"):
+                return {
+                    "prediction":        "INVALID",
+                    "confidence":        0.0,
+                    "class_probs":       {c: 0.0 for c in self.classes},
+                    "depth_map_colored": None,
+                    "depth_metrics":     {},
+                    "quality_ok":        False,
+                    "quality_issues":    ["Container marking panel — not an opening"],
+                    "quality_metrics":   {},
+                    "ocr_result":        ocr,
+                    "reasoning": (
+                        f"Container marking panel detected (number: {ocr.get('number', '')})\n\n"
+                        "This image shows the exterior data plate of the container\n"
+                        "(weight, dimensions, ISO code) rather than the container opening.\n\n"
+                        "Recommendations:\n"
+                        "  • Photograph the container from the door/opening end.\n"
+                        "  • The system classifies container status (full/empty) from the\n"
+                        "    interior view through the opening, not from the side wall."
+                    ),
+                }
+        else:
+            ocr = {
+                "found": True, "number": "", "confidence": 1.0,
+                "raw_texts": [], "is_marking_panel": False,
+                "message": "OCR gate disabled.",
+            }
 
         # 1. Detection Gate (New Integration)
         if self.detector is not None:
@@ -407,6 +463,9 @@ class ContainerPredictor:
                 }
             # Use the cropped container for subsequent analysis
             pil_img = det["crop"]
+
+        # Attach OCR result so all downstream return paths include it.
+        result["ocr_result"] = ocr
 
         # 2. Quality gate
         q_ok, q_issues, q_metrics = check_quality(pil_img)
@@ -557,8 +616,24 @@ class ContainerPredictor:
         num_uploaded = len(pil_images)
         all_detections: list[dict] = []
 
-        # ── Step 1–2: YOLO detection + NOT_CONTAINER filter ───────────────────
+        # ── Step 0 + 1–2: OCR gate, YOLO detection, NOT_CONTAINER filter ────────
+        # The OCR gate (step 0) runs on the original image before any YOLO crop
+        # so exterior container-number markings remain visible.  Images that
+        # lack a recognisable ISO 6346 container number are excluded; if none
+        # of the uploaded images pass OCR the pipeline exits early.
         for idx, img in enumerate(pil_images):
+
+            # Step 0: OCR container-number gate (per image, on original)
+            if self._ocr_validate is not None:
+                ocr = self._ocr_validate(img)
+            else:
+                ocr = {
+                    "found": True, "number": "", "confidence": 1.0,
+                    "raw_texts": [], "is_marking_panel": False,
+                    "message": "OCR gate disabled.",
+                }
+
+            # Step 1: YOLO container detection
             if self.detector is not None:
                 det = self.detector.detect(img)
             else:
@@ -572,23 +647,41 @@ class ContainerPredictor:
             if detection_threshold is not None and det["confidence"] < threshold:
                 det["detected"] = False
 
+            # Marking-panel images are excluded from classification (they show the
+            # exterior data plate, not the opening).  "number not found" alone does
+            # NOT exclude an image — opening/interior views have no visible number.
+            is_panel = ocr.get("is_marking_panel", False)
             all_detections.append({
-                "image_idx":     idx,
-                "detected":      det["detected"],
+                "image_idx":      idx,
+                "detected":       det["detected"] and not is_panel,
                 "det_confidence": round(det["confidence"], 3),
-                "bbox":          det["bbox"],
-                "label":         det["label"],
-                "det_mode":      det["mode"],
-                "crop":          det["crop"],
-                "original":      img,
+                "bbox":           det["bbox"],
+                "label":          det["label"],
+                "det_mode":       det["mode"],
+                "crop":           det["crop"],
+                "original":       img,
+                "ocr_valid":      ocr["found"],
+                "ocr_number":     ocr["number"],
+                "ocr_confidence": round(ocr["confidence"], 3),
+                "ocr_message":    ocr["message"],
+                "is_marking_panel": is_panel,
             })
 
         detected = [d for d in all_detections if d["detected"]]
         num_detected = len(detected)
 
         if num_detected == 0:
+            panels = [d for d in all_detections if d.get("is_marking_panel")]
+            if panels and len(panels) == len(all_detections):
+                reason = (
+                    "All uploaded images show the container exterior marking panel,\n"
+                    "not the container opening.\n\n"
+                    "Please photograph the container from the door/opening end."
+                )
+            else:
+                reason = "No shipping containers detected."
             return {
-                **self._empty_result(num_uploaded, "No shipping containers detected."),
+                **self._empty_result(num_uploaded, reason),
                 "all_detections": [
                     {k: v for k, v in d.items() if k not in ("crop", "original")}
                     for d in all_detections
@@ -653,12 +746,15 @@ class ContainerPredictor:
 
         all_det_summary = [
             {
-                "image_idx":   d["image_idx"],
-                "detected":    d["detected"],
-                "det_conf":    d["det_confidence"],
-                "label":       d["label"],
-                "quality_score": d.get("quality_score"),
-                "selected":    d in selected,
+                "image_idx":      d["image_idx"],
+                "detected":       d["detected"],
+                "det_conf":       d["det_confidence"],
+                "label":          d["label"],
+                "quality_score":  d.get("quality_score"),
+                "selected":       d in selected,
+                "ocr_valid":      d["ocr_valid"],
+                "ocr_number":     d["ocr_number"],
+                "ocr_confidence": d["ocr_confidence"],
             }
             for d in all_detections
         ]
