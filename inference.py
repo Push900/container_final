@@ -79,7 +79,7 @@ TOP_K_IMAGES                  = 3      # number of best images used in ensemble
 # OCR container-number gate (step 0, applied before all other logic).
 # Defined here for visibility; actual thresholds live in ocr_validator.py.
 # Set OCR_GATE_ENABLED = False to disable the gate without removing the code.
-OCR_GATE_ENABLED = True
+OCR_GATE_ENABLED = False
 
 
 # ── Classifier helpers ────────────────────────────────────────────────────────
@@ -386,15 +386,13 @@ class ContainerPredictor:
             self.detector = None
 
         # OCR container-number validation gate (step 0 of the pipeline).
-        # Loaded lazily inside ocr_validator; falls back to passthrough if
-        # easyocr is not installed.
         print("  Loading OCR validator …", end=" ", flush=True)
         try:
             from ocr_validator import validate_container_number  # noqa: PLC0415
-            self._ocr_validate = validate_container_number if OCR_GATE_ENABLED else None
-            print("done" if OCR_GATE_ENABLED else "disabled (OCR_GATE_ENABLED=False)")
+            self._ocr_validate = validate_container_number
+            print("done")
         except Exception as exc:
-            logger.warning("OCR validator unavailable (%s) — OCR gate disabled.", exc)
+            logger.warning("OCR validator unavailable (%s) — passthrough mode.", exc)
             self._ocr_validate = None
 
     # ── Single-image public API (unchanged) ───────────────────────────────────
