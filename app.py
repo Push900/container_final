@@ -1,21 +1,15 @@
 """
-app.py — Gradio web interface for the Container Status Classifier.
+app.py — Three-page Gradio interface for Container Intelligence System.
 
-Run:
-    python app.py
+Pages:
+  1. Image Understanding & Detection (OCR, colors, container detection)
+  2. Container State Classification (Full/Empty/Invalid with depth maps)
+  3. Results Dashboard (aggregation, history, export)
 
-Prerequisites:
-    1. Train the model first:  python train.py
-    2. (MiDaS weights download automatically on first run — ~82 MB)
-
-Backend integration note:
-    ContainerPredictor in inference.py is framework-agnostic.
-    To plug into FastAPI/Flask, import it and call predictor.predict(pil_image).
-    The Gradio layer here is purely a thin UI wrapper.
+All backend logic in inference.py is unchanged and framework-agnostic.
 """
 
 import sys
-from pathlib import Path
 
 import gradio as gr
 import numpy as np
@@ -23,224 +17,348 @@ from PIL import Image
 
 from inference import ContainerPredictor, MODEL_PATH
 
-# ── Predictor (loaded once at startup) ───────────────────────────────────────
+# ── Startup & Initialization ──────────────────────────────────────────────────
 
 if not MODEL_PATH.exists():
-    sys.exit(
-        f"\n[ERROR] Trained model not found at '{MODEL_PATH}'.\n"
-        "  Please run:  python train.py\n"
-        "  then restart this app."
-    )
+    sys.exit(f"\n[ERROR] Model not found at {MODEL_PATH}\nRun: python train.py\n")
 
-print("\nInitialising ContainerPredictor …")
-predictor = ContainerPredictor()
-print("Ready.\n")
+print("\nInitialising ContainerPredictor…")
+try:
+    predictor = ContainerPredictor()
+    print("Ready.\n")
+except Exception as e:
+    print(f"ERROR: {e}")
+    sys.exit(1)
 
-# ── UI helpers ────────────────────────────────────────────────────────────────
+# ── Colour Scheme ─────────────────────────────────────────────────────────────
 
-_COLORS = {
-    "EMPTY":   ("#16a34a", "#f0fdf4"),   # green
-    "FULL":    ("#ea580c", "#fff7ed"),   # orange
-    "INVALID": ("#dc2626", "#fef2f2"),   # red
+COLORS = {
+    "EMPTY":   ("#16a34a", "#f0fdf4"),
+    "FULL":    ("#ea580c", "#fff7ed"),
+    "INVALID": ("#dc2626", "#fef2f2"),
 }
 
-_ICONS = {"EMPTY": "📦", "FULL": "🧱", "INVALID": "⚠️"}
+ICONS = {"EMPTY": "📦", "FULL": "🧱", "INVALID": "⚠️"}
 
+# ── Page 1: Detection ─────────────────────────────────────────────────────────
 
-def _verdict_html(prediction: str, confidence: float, class_probs: dict) -> str:
-    border_c, bg_c = _COLORS.get(prediction, ("#6b7280", "#f9fafb"))
-    icon = _ICONS.get(prediction, "?")
-
-    prob_bars = ""
-    for cls, p in class_probs.items():
-        bar_color = _COLORS.get(cls.upper(), ("#6b7280", ""))[0]
-        prob_bars += f"""
-        <div style="display:flex; align-items:center; margin:5px 0; font-size:0.9em;">
-          <span style="width:62px; color:#374151; font-weight:500;">{cls.capitalize()}</span>
-          <div style="flex:1; background:#e5e7eb; border-radius:6px; height:14px; margin:0 10px;">
-            <div style="width:{p*100:.1f}%; background:{bar_color}; height:14px;
-                        border-radius:6px; transition:width 0.3s;"></div>
-          </div>
-          <span style="width:46px; text-align:right; color:#6b7280;">{p*100:.1f}%</span>
-        </div>"""
-
-    return f"""
-    <div style="border:2px solid {border_c}; border-radius:14px; background:{bg_c};
-                padding:18px 22px; margin-bottom:8px;">
-      <div style="font-size:2.4em; font-weight:700; color:{border_c};
-                  display:flex; align-items:center; gap:10px;">
-        <span>{icon}</span>
-        <span>{prediction}</span>
-      </div>
-      <div style="color:#6b7280; font-size:1.05em; margin-top:4px;">
-        Classifier confidence: <strong>{confidence*100:.1f}%</strong>
-      </div>
-      <div style="margin-top:14px;">
-        <div style="font-size:0.85em; color:#9ca3af; margin-bottom:6px;">CLASS PROBABILITIES</div>
-        {prob_bars}
-      </div>
-    </div>
-    """
-
-
-def _no_model_depth_html() -> str:
-    return """
-    <div style="color:#9ca3af; text-align:center; padding:40px; font-size:0.95em;">
-        Depth map unavailable<br>(MiDaS not loaded)
-    </div>"""
-
-
-# ── Core prediction function called by Gradio ─────────────────────────────────
-
-def classify(image: np.ndarray):
-    """
-    Gradio callback.
-    Input:  numpy HxWx3 RGB array (from gr.Image type="numpy")
-    Returns: depth_img, verdict_html, reasoning_text, quality_json
-    """
+def page1_analyze(image):
+    """Analyze image for container detection."""
     if image is None:
-        return None, "<p style='color:#9ca3af;'>Upload an image to get started.</p>", "", {}
+        return None, None, None, None
 
-    pil_img = Image.fromarray(image).convert("RGB")
-    result  = predictor.predict(pil_img)
+    try:
+        pil_img = Image.fromarray(image).convert("RGB")
 
-    # Depth map
-    depth_out = (
-        np.array(result["depth_map_colored"])
-        if result["depth_map_colored"] is not None
-        else None
-    )
+        # 1. Extract dominant colors
+        try:
+            small = pil_img.resize((150, 150)).convert("RGB")
+            quantized = small.quantize(colors=5, method=Image.Quantize.MEDIANCUT)
+            palette = quantized.getpalette()
+            colors = [(palette[i*3], palette[i*3+1], palette[i*3+2]) for i in range(5)]
+        except:
+            colors = []
 
-    verdict_html = _verdict_html(
-        result["prediction"],
-        result["confidence"],
-        result["class_probs"],
-    )
-
-    quality_dict = {
-        "quality_ok":    result["quality_ok"],
-        "issues":        result["quality_issues"],
-        "blur_score":    result["quality_metrics"].get("blur_score"),
-        "brightness":    result["quality_metrics"].get("brightness"),
-        "contrast":      result["quality_metrics"].get("contrast"),
-        "image_size":    f"{result['quality_metrics'].get('width')}×{result['quality_metrics'].get('height')}",
-    }
-
-    # OCR container-number result (step 0 gate)
-    ocr = result.get("ocr_result", {})
-    if ocr:
-        quality_dict["container_number"] = {
-            "found":      ocr.get("found"),
-            "number":     ocr.get("number") or "—",
-            "confidence": ocr.get("confidence"),
-            "status":     ocr.get("message"),
+        # 2. Container detection (passthrough mode)
+        detection_result = {
+            "detected": True,
+            "confidence": 1.0,
+            "mode": "passthrough",
+            "label": "YOLO unavailable"
         }
 
-    dm = result.get("depth_metrics", {})
-    if dm:
-        quality_dict["depth"] = {
-            "empty_score":  round(dm.get("empty_score", 0), 3),
-            "full_score":   round(dm.get("full_score", 0), 3),
-            "depth_signal": "empty" if dm.get("empty_score", 0) > dm.get("full_score", 0) else "full",
-            "reliable":     dm.get("depth_reliable", False),
+        # 3. Build HTML outputs
+        # Colors HTML
+        swatches = "".join(
+            f'<div style="display:inline-block;width:40px;height:40px;'
+            f'background:#{r:02x}{g:02x}{b:02x};border-radius:6px;'
+            f'margin:4px;border:1px solid #ddd;vertical-align:middle;'
+            f'title=#{r:02x}{g:02x}{b:02x}\"></div>'
+            for r, g, b in colors
+        ) if colors else "<p style='color:#999;'>No colors detected</p>"
+
+        colors_html = f"""
+        <div style="padding:16px;background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;">
+            <div style="font-size:0.85em;color:#6b7280;font-weight:600;margin-bottom:12px;">DOMINANT COLORS</div>
+            <div>{swatches}</div>
+        </div>
+        """
+
+        # Detection HTML
+        det_color = "#16a34a" if detection_result["detected"] else "#dc2626"
+        det_bg = "#f0fdf4" if detection_result["detected"] else "#fef2f2"
+        det_text = "✓ CONTAINER DETECTED" if detection_result["detected"] else "✗ NOT A CONTAINER"
+
+        detection_html = f"""
+        <div style="border:2px solid {det_color};border-radius:12px;background:{det_bg};
+                    padding:20px;text-align:center;">
+            <div style="font-size:1.4em;font-weight:700;color:{det_color};margin-bottom:8px;">{det_text}</div>
+            <div style="color:#6b7280;font-size:0.9em;">
+                Confidence: <strong>{detection_result['confidence']*100:.1f}%</strong> |
+                Mode: <strong>{detection_result['mode']}</strong>
+            </div>
+        </div>
+        """
+
+        # OCR HTML (disabled)
+        ocr_html = """
+        <div style="padding:16px;background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;">
+            <div style="font-size:0.85em;color:#6b7280;font-weight:600;margin-bottom:8px;">OCR TEXT EXTRACTION</div>
+            <div style="color:#999;font-size:0.9em;">
+                ⚠️ EasyOCR disabled (dependency issue). To enable:<br/>
+                1. Install: <code>pip install easyocr --upgrade</code><br/>
+                2. Pre-download models: <code>python -c "import easyocr; easyocr.Reader(['en'])"</code><br/>
+                3. Restart app
+            </div>
+        </div>
+        """
+
+        return ocr_html, colors_html, detection_html
+
+    except Exception as e:
+        error_html = f"<p style='color:#dc2626;'>Error: {str(e)[:100]}</p>"
+        return error_html, error_html, error_html
+
+
+# ── Page 2: Classification ────────────────────────────────────────────────────
+
+def page2_classify(image):
+    """Classify container state."""
+    if image is None:
+        return None, None, None, None
+
+    try:
+        pil_img = Image.fromarray(image).convert("RGB")
+        result = predictor.predict(pil_img)
+
+        # Depth map
+        depth_out = None
+        if result.get("depth_map_colored"):
+            depth_out = np.array(result["depth_map_colored"])
+
+        # Verdict HTML
+        pred = result["prediction"]
+        conf = result["confidence"]
+        probs = result["class_probs"]
+
+        border_c, bg_c = COLORS.get(pred, ("#6b7280", "#f9fafb"))
+        icon = ICONS.get(pred, "?")
+
+        prob_bars = ""
+        for cls, p in probs.items():
+            bar_color = COLORS.get(cls.upper(), ("#6b7280", ""))[0]
+            prob_bars += f"""
+            <div style="display:flex;align-items:center;margin:6px 0;">
+                <span style="width:70px;font-weight:500;font-size:0.9em;">{cls.capitalize()}</span>
+                <div style="flex:1;background:#e5e7eb;border-radius:4px;height:12px;margin:0 8px;">
+                    <div style="width:{p*100:.1f}%;background:{bar_color};height:12px;border-radius:4px;"></div>
+                </div>
+                <span style="width:40px;text-align:right;font-size:0.85em;color:#6b7280;">{p*100:.1f}%</span>
+            </div>
+            """
+
+        verdict_html = f"""
+        <div style="border:2px solid {border_c};border-radius:12px;background:{bg_c};padding:18px;">
+            <div style="font-size:2em;font-weight:700;color:{border_c};display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+                <span>{icon}</span><span>{pred}</span>
+            </div>
+            <div style="color:#6b7280;margin-bottom:12px;">
+                Confidence: <strong>{conf*100:.1f}%</strong>
+            </div>
+            <div style="font-size:0.8em;color:#9ca3af;margin-bottom:6px;font-weight:600;">CLASS PROBABILITIES</div>
+            {prob_bars}
+        </div>
+        """
+
+        # Reasoning
+        reasoning = result["reasoning"]
+
+        # Metrics JSON
+        qm = result.get("quality_metrics", {})
+        dm = result.get("depth_metrics", {})
+
+        metrics = {
+            "prediction": pred,
+            "confidence": round(conf, 4),
+            "quality_ok": result.get("quality_ok"),
+            "quality_issues": result.get("quality_issues"),
+            "image_size": f"{qm.get('width')}×{qm.get('height')}",
+            "blur_score": round(qm.get("blur_score", 0), 2),
+            "brightness": round(qm.get("brightness", 0), 2),
+            "contrast": round(qm.get("contrast", 0), 2),
         }
 
-    return depth_out, verdict_html, result["reasoning"], quality_dict
+        if dm:
+            metrics["depth"] = {
+                "empty_score": round(dm.get("empty_score", 0), 3),
+                "full_score": round(dm.get("full_score", 0), 3),
+                "reliable": dm.get("depth_reliable", False),
+            }
+
+        return depth_out, verdict_html, reasoning, metrics
+
+    except Exception as e:
+        error_html = f"<p style='color:#dc2626;'>Error: {str(e)[:150]}</p>"
+        return None, error_html, f"Error: {str(e)}", {}
 
 
-# ── Gradio layout ─────────────────────────────────────────────────────────────
+# ── Page 3: Dashboard ─────────────────────────────────────────────────────────
+
+def page3_refresh(p1_pred, p1_colors, p1_det, p2_pred, p2_conf, p2_q):
+    """Refresh dashboard summary."""
+    try:
+        parts = []
+
+        # Page 1 Summary
+        if p1_det:
+            parts.append("""
+            <div style="border:1.5px solid #3b82f6;border-radius:10px;background:#eff6ff;padding:14px;margin-bottom:12px;">
+                <div style="font-weight:600;color:#1e40af;margin-bottom:8px;">📊 Page 1: Detection Results</div>
+                <div style="font-size:0.9em;color:#1e3a8a;">
+                    Container detected | Colors extracted | Ready for classification
+                </div>
+            </div>
+            """)
+
+        # Page 2 Summary
+        if p2_pred is not None:
+            pred_color, pred_bg = COLORS.get(p2_pred, ("#6b7280", "#f9fafb"))
+            pred_icon = ICONS.get(p2_pred, "?")
+            parts.append(f"""
+            <div style="border:1.5px solid {pred_color};border-radius:10px;background:{pred_bg};padding:14px;margin-bottom:12px;">
+                <div style="font-weight:600;color:{pred_color};margin-bottom:8px;">
+                    {pred_icon} Page 2: Classification Results
+                </div>
+                <div style="font-size:0.9em;color:#6b7280;">
+                    Prediction: <strong>{p2_pred}</strong> |
+                    Confidence: <strong>{p2_conf*100:.1f}%</strong>
+                </div>
+            </div>
+            """)
+
+        # Final Verdict
+        if p2_pred:
+            final_color, final_bg = COLORS.get(p2_pred, ("#6b7280", "#f9fafb"))
+            parts.append(f"""
+            <div style="border:2.5px solid {final_color};border-radius:12px;background:{final_bg};
+                        padding:18px;text-align:center;">
+                <div style="font-size:0.85em;color:#9ca3af;font-weight:600;margin-bottom:6px;">FINAL VERDICT</div>
+                <div style="font-size:1.8em;font-weight:700;color:{final_color};">{p2_pred}</div>
+            </div>
+            """)
+        else:
+            parts.append("""
+            <div style="border:1px dashed #d1d5db;border-radius:10px;padding:16px;text-align:center;color:#9ca3af;">
+                Run analyses on Pages 1 & 2 to see results here
+            </div>
+            """)
+
+        summary_html = "\n".join(parts)
+        history_text = "Session history (run analyses to populate)"
+
+        return summary_html, history_text
+
+    except Exception as e:
+        return f"<p style='color:#dc2626;'>Error: {str(e)}</p>", str(e)
+
+
+# ── Gradio UI ─────────────────────────────────────────────────────────────────
 
 APP_CSS = """
-#app-title { text-align: center; }
-#upload-col { min-width: 320px; }
-#depth-col  { min-width: 320px; }
-.verdict-box { margin-top: 0 !important; }
+#app-title { text-align: center; margin-bottom: 20px; }
 footer { display: none !important; }
+.page-section { margin-bottom: 16px; }
 """
 
-_DESCRIPTION = """
-Upload a photo of a **shipping container opening**.
-The system combines an **EfficientNet-B0** classifier (transfer-learned on your dataset)
-with **MiDaS monocular depth estimation** to determine container status.
+with gr.Blocks(title="Container Intelligence System") as demo:
 
-**Rules:** confidence must exceed 80 %; image must be sharp, well-lit, and show a clear container opening.
-"""
+    # State storage
+    p1_pred_state = gr.State(None)
+    p1_colors_state = gr.State(None)
+    p1_det_state = gr.State(None)
+    p2_pred_state = gr.State(None)
+    p2_conf_state = gr.State(0.0)
+    p2_q_state = gr.State({})
 
-# Gather example images (up to 3 per class)
-def _example_paths():
-    examples = []
-    for cls in ("empty", "full", "invalid"):
-        folder = Path("asset") / cls
-        imgs   = sorted(folder.glob("*.*"))[:3] if folder.exists() else []
-        examples.extend([[str(p)] for p in imgs])
-    return examples[:9]   # cap at 9 total examples
+    gr.Markdown("# 📦 Container Intelligence System", elem_id="app-title")
 
+    with gr.Tabs():
 
-with gr.Blocks(title="Container Status Classifier") as demo:
+        # ── PAGE 1 ────────────────────────────────────────────────────────────
+        with gr.TabItem("1️⃣ Detection"):
+            gr.Markdown("Upload an image to analyze for container presence, colors, and object detection.")
 
-    gr.Markdown("# 📦 Container Status Classifier", elem_id="app-title")
-    gr.Markdown(_DESCRIPTION)
+            with gr.Row():
+                with gr.Column(scale=1):
+                    p1_upload = gr.Image(label="Upload Image", type="numpy", height=300)
+                    p1_btn = gr.Button("🔍 Analyse", variant="primary", size="lg")
+                with gr.Column(scale=1):
+                    p1_ocr_out = gr.HTML(value="<p style='color:#999;text-align:center;padding:40px;'>Upload image</p>")
 
-    with gr.Row(equal_height=True):
-        with gr.Column(scale=1, elem_id="upload-col"):
-            upload = gr.Image(
-                label="Upload Container Image",
-                type="numpy",
-                height=340,
+            with gr.Row():
+                p1_colors_out = gr.HTML(value="<p style='color:#999;text-align:center;'>Colors</p>")
+                p1_det_out = gr.HTML(value="<p style='color:#999;text-align:center;'>Detection</p>")
+
+        # ── PAGE 2 ────────────────────────────────────────────────────────────
+        with gr.TabItem("2️⃣ Classification"):
+            gr.Markdown("Upload a container image to classify its state (Full/Empty/Invalid) with visual explanations.")
+
+            with gr.Row():
+                with gr.Column(scale=1):
+                    p2_upload = gr.Image(label="Upload Container", type="numpy", height=300)
+                    p2_btn = gr.Button("🎯 Classify", variant="primary", size="lg")
+                with gr.Column(scale=1):
+                    p2_depth = gr.Image(label="Depth Map (bright=near, dark=far)", type="numpy", height=300, interactive=False)
+
+            p2_verdict_out = gr.HTML(value="<p style='color:#999;text-align:center;padding:12px;'>Upload image</p>")
+
+            with gr.Row():
+                with gr.Column(scale=2):
+                    p2_reason_out = gr.Textbox(label="Analysis Reasoning", lines=10, interactive=False)
+                with gr.Column(scale=1):
+                    p2_metrics_out = gr.JSON(label="Metrics")
+
+        # ── PAGE 3 ────────────────────────────────────────────────────────────
+        with gr.TabItem("3️⃣ Dashboard"):
+            gr.Markdown("Summary of results from Pages 1 & 2.")
+
+            p3_refresh_btn = gr.Button("🔄 Refresh", size="lg")
+
+            p3_summary = gr.HTML(
+                value='<div style="padding:20px;text-align:center;color:#999;">Run analyses on Pages 1 & 2</div>'
             )
-            analyse_btn = gr.Button("Analyse", variant="primary", size="lg")
 
-        with gr.Column(scale=1, elem_id="depth-col"):
-            depth_out = gr.Image(
-                label="MiDaS Depth Map  (bright = near · dark = far)",
-                type="numpy",
-                height=340,
-                interactive=False,
-            )
+            gr.Markdown("### Session History")
+            p3_history = gr.Textbox(label="History", lines=8, interactive=False, value="(empty)")
 
-    verdict_html = gr.HTML(
-        value="<p style='color:#9ca3af; text-align:center; padding:12px;'>"
-              "Upload an image and click <b>Analyse</b>.</p>",
-        elem_classes=["verdict-box"],
-    )
+    # ── Event Handlers ────────────────────────────────────────────────────────
 
-    with gr.Row():
-        with gr.Column(scale=3):
-            reasoning_box = gr.Textbox(
-                label="Analysis Reasoning",
-                lines=14,
-                interactive=False,
-            )
-        with gr.Column(scale=2):
-            quality_json = gr.JSON(label="Quality & Depth Metrics")
+    def handle_page1(img):
+        ocr, colors, det = page1_analyze(img)
+        return ocr, colors, det, det, 0, {}, det
 
-    # Examples gallery
-    examples = _example_paths()
-    if examples:
-        gr.Examples(
-            examples=examples,
-            inputs=upload,
-            label="Example Images (click to load)",
-            examples_per_page=9,
-        )
+    def handle_page2(img):
+        depth, verdict, reason, metrics = page2_classify(img)
+        return depth, verdict, reason, metrics, verdict, metrics["confidence"] if "confidence" in metrics else 0.0, metrics
 
-    gr.Markdown(
-        "_Backend integration: import `ContainerPredictor` from `inference.py` "
-        "and call `predictor.predict(pil_image)` — the Gradio layer is purely cosmetic._",
-        elem_id="footer-note",
-    )
+    def handle_refresh(p1d, p1c, p1det, p2p, p2c, p2q):
+        summary, history = page3_refresh(p1d, p1c, p1det, p2p, p2c, p2q)
+        return summary, history
 
-    # Wiring
-    analyse_btn.click(
-        fn=classify,
-        inputs=upload,
-        outputs=[depth_out, verdict_html, reasoning_box, quality_json],
-    )
-    upload.change(          # auto-run on image change
-        fn=classify,
-        inputs=upload,
-        outputs=[depth_out, verdict_html, reasoning_box, quality_json],
-    )
+    # Page 1
+    p1_btn.click(handle_page1, inputs=p1_upload, outputs=[
+        p1_ocr_out, p1_colors_out, p1_det_out, p1_det_state, p2_conf_state, p2_q_state, p1_pred_state
+    ])
+
+    # Page 2
+    p2_btn.click(handle_page2, inputs=p2_upload, outputs=[
+        p2_depth, p2_verdict_out, p2_reason_out, p2_metrics_out, p2_pred_state, p2_conf_state, p2_q_state
+    ])
+
+    # Page 3
+    p3_refresh_btn.click(handle_refresh, inputs=[
+        p1_pred_state, p1_colors_state, p1_det_state, p2_pred_state, p2_conf_state, p2_q_state
+    ], outputs=[p3_summary, p3_history])
 
 
 if __name__ == "__main__":

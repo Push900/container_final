@@ -1,0 +1,4 @@
+  File "<string>", line 1
+    print(Importing ocr_validator...);
+          ^^^^^^^^^^^^^^^^^^^^^^^
+SyntaxError: invalid syntax. Perhaps you forgot a comma?

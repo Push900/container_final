@@ -51,11 +51,11 @@ def main():
 
     from app import demo, APP_CSS
     demo.launch(
-        server_name="127.0.0.1",
+         server_name="127.0.0.1",
         server_port=7860,
+        # Gradio will find an available port starting from 7860
         share=False,
         show_error=True,
-        css=APP_CSS,
     )
 
 
