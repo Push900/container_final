@@ -1,0 +1,32 @@
+{
+  "overall_accuracy": 0.46938775510204084,
+  "confusion_matrix": [
+    [
+      0,
+      0,
+      16
+    ],
+    [
+      0,
+      2,
+      10
+    ],
+    [
+      0,
+      0,
+      21
+    ]
+  ],
+  "class_distribution": {
+    "true": {
+      "empty": 16,
+      "full": 12,
+      "invalid": 21
+    },
+    "predicted": {
+      "full": 2,
+      "invalid": 47
+    }
+  },
+  "num_samples": 49
+}

@@ -40,6 +40,7 @@ Multi-image result dict keys:
 import json
 import logging
 from pathlib import Path
+import threading
 
 import cv2
 import numpy as np
@@ -58,7 +59,7 @@ META_PATH   = Path("models/classifier_meta.json")
 CLASSES_DEFAULT = ["empty", "full", "invalid"]
 
 IMG_SIZE         = 224
-CONF_THRESHOLD   = 0.80   # per-image classifier confidence gate
+CONF_THRESHOLD   = 0.50   # per-image classifier confidence gate (lowered for better usability)
 
 # Image quality thresholds
 BLUR_THRESHOLD   = 80.0
@@ -73,13 +74,13 @@ MIDAS_REPO       = "isl-org/MiDaS"
 DEPTH_CONFLICT_CONF_GATE = 0.92
 
 # Multi-image pipeline constants
-CONTAINER_DETECTION_THRESHOLD = 0.80   # YOLO gate for NOT_CONTAINER filter
+CONTAINER_DETECTION_THRESHOLD = 0.30   # YOLO gate for NOT_CONTAINER filter (lowered for better usability)
 TOP_K_IMAGES                  = 3      # number of best images used in ensemble
 
 # OCR container-number gate (step 0, applied before all other logic).
 # Defined here for visibility; actual thresholds live in ocr_validator.py.
 # Set OCR_GATE_ENABLED = False to disable the gate without removing the code.
-OCR_GATE_ENABLED = False
+OCR_GATE_ENABLED = True
 
 
 # ── Classifier helpers ────────────────────────────────────────────────────────
@@ -369,12 +370,23 @@ class ContainerPredictor:
         self.classifier, self.classes = load_classifier(model_path)
         print("done")
 
-        print("  Loading MiDaS depth model …", end=" ", flush=True)
-        self.midas, self.midas_tf = load_midas(depth_model_type)
-        if self.midas:
-            print("done")
-        else:
-            print("skipped (depth disabled)")
+        # MiDaS Depth Model - Async Loading
+        self.midas = None
+        self.midas_tf = None
+        self._depth_loading = True
+        
+        def _load_depth():
+            print("  Starting MiDaS depth model background load …")
+            m, tf = load_midas(depth_model_type)
+            self.midas = m
+            self.midas_tf = tf
+            self._depth_loading = False
+            if self.midas:
+                print("\n  [INFO] MiDaS depth model loaded successfully.")
+            else:
+                print("\n  [WARN] MiDaS depth model failed to load.")
+
+        threading.Thread(target=_load_depth, daemon=True).start()
 
         print("  Loading container detector …", end=" ", flush=True)
         try:
@@ -385,15 +397,27 @@ class ContainerPredictor:
             logger.warning("ContainerDetector unavailable (%s) — passthrough mode.", exc)
             self.detector = None
 
-        # OCR container-number validation gate (step 0 of the pipeline).
-        print("  Loading OCR validator …", end=" ", flush=True)
+        # OCR container-number validation gate.
+        # We load this asynchronously because EasyOCR can take a long time to
+        # initialize/download models on the first run, blocking app startup.
+        self._ocr_validate = None
+        self._ocr_loading = False
+        if OCR_GATE_ENABLED:
+            self._ocr_loading = True
+            print("  Starting OCR validator background load …")
+            threading.Thread(target=self._init_ocr_async, daemon=True).start()
+
+    def _init_ocr_async(self):
+        """Initialize EasyOCR in a background thread."""
         try:
-            from ocr_validator import validate_container_number  # noqa: PLC0415
+            from ocr_validator import validate_container_number, _get_reader
+            _get_reader()  # Force initialization of the Reader singleton (downloads models)
             self._ocr_validate = validate_container_number
-            print("done")
         except Exception as exc:
-            logger.warning("OCR validator unavailable (%s) — passthrough mode.", exc)
-            self._ocr_validate = None
+            logger.error("OCR background initialization failed: %s", exc)
+        finally:
+            self._ocr_loading = False
+            print("\n  [INFO] OCR validator background load complete.")
 
     # ── Single-image public API (unchanged) ───────────────────────────────────
 
@@ -500,6 +524,13 @@ class ContainerPredictor:
         dm: dict                   = {}
         depth_img: Image.Image | None = None
         depth_signal               = "unavailable"
+
+        # Wait for async depth model load if still in progress (max 10 seconds)
+        wait_time = 0
+        while self._depth_loading and wait_time < 10:
+            import time
+            time.sleep(0.1)
+            wait_time += 0.1
 
         if self.midas is not None:
             try:

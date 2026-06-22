@@ -100,18 +100,41 @@ def page1_analyze(image):
         </div>
         """
 
-        # OCR HTML (disabled)
-        ocr_html = """
-        <div style="padding:16px;background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;">
-            <div style="font-size:0.85em;color:#6b7280;font-weight:600;margin-bottom:8px;">OCR TEXT EXTRACTION</div>
-            <div style="color:#999;font-size:0.9em;">
-                ⚠️ EasyOCR disabled (dependency issue). To enable:<br/>
-                1. Install: <code>pip install easyocr --upgrade</code><br/>
-                2. Pre-download models: <code>python -c "import easyocr; easyocr.Reader(['en'])"</code><br/>
-                3. Restart app
+        # 3. OCR Analysis (Dynamic)
+        if predictor._ocr_validate:
+            try:
+                ocr = predictor._ocr_validate(pil_img)
+                status_color = "#16a34a" if ocr["found"] else "#dc2626"
+                found_text = "FOUND" if ocr["found"] else "NOT FOUND"
+
+                ocr_html = f"""
+                <div style="padding:16px;background:#f9fafb;border-radius:10px;border:1px solid #e5e7eb;">
+                    <div style="font-size:0.85em;color:#6b7280;font-weight:600;margin-bottom:8px;">OCR TEXT EXTRACTION</div>
+                    <div style="font-size:1.1em;font-weight:700;color:{status_color};">{found_text}</div>
+                    <div style="font-size:0.95em;margin:4px 0;">Number: <strong>{ocr['number'] or '---'}</strong></div>
+                    <div style="color:#6b7280;font-size:0.85em;">{ocr['message']}</div>
+                </div>
+                """
+            except Exception as ocr_err:
+                ocr_html = f"""
+                <div style="padding:16px;background:#fee2e2;border-radius:10px;border:1px solid #fecaca;">
+                    <div style="font-size:0.85em;color:#991b1b;font-weight:600;">OCR ERROR</div>
+                    <div style="font-size:0.8em;color:#7f1d1d;">{str(ocr_err)[:80]}</div>
+                </div>
+                """
+        elif getattr(predictor, "_ocr_loading", False):
+            ocr_html = """
+            <div style="padding:16px;background:#fffbeb;border-radius:10px;border:1px solid #fef3c7;">
+                <div style="font-size:0.85em;color:#92400e;font-weight:600;margin-bottom:4px;">OCR MODULE LOADING...</div>
+                <div style="font-size:0.85em;color:#b45309;">Downloading models or initializing engine. Analysis will proceed without OCR for now.</div>
             </div>
-        </div>
-        """
+            """
+        else:
+            ocr_html = """
+            <div style="padding:16px;background:#fef2f2;border-radius:10px;border:1px solid #fee2e2;">
+                <div style="font-size:0.85em;color:#991b1b;font-weight:600;">OCR MODULE NOT LOADED</div>
+            </div>
+            """
 
         return ocr_html, colors_html, detection_html
 
@@ -133,8 +156,15 @@ def page2_classify(image):
 
         # Depth map
         depth_out = None
-        if result.get("depth_map_colored"):
+        if getattr(predictor, "_depth_loading", False):
+            # Create a placeholder "Loading" image or just keep it None
+            depth_out = None 
+            reasoning_prefix = "⏳ Depth Model is still loading in the background...\n\n"
+        elif result.get("depth_map_colored"):
             depth_out = np.array(result["depth_map_colored"])
+            reasoning_prefix = ""
+        else:
+            reasoning_prefix = "⚠️ Depth detection unavailable (Model failed to load).\n\n"
 
         # Verdict HTML
         pred = result["prediction"]
@@ -171,7 +201,7 @@ def page2_classify(image):
         """
 
         # Reasoning
-        reasoning = result["reasoning"]
+        reasoning = reasoning_prefix + result["reasoning"]
 
         # Metrics JSON
         qm = result.get("quality_metrics", {})
@@ -334,12 +364,20 @@ with gr.Blocks(title="Container Intelligence System") as demo:
     # ── Event Handlers ────────────────────────────────────────────────────────
 
     def handle_page1(img):
-        ocr, colors, det = page1_analyze(img)
-        return ocr, colors, det, det, 0, {}, det
+        try:
+            ocr, colors, det = page1_analyze(img)
+            return ocr, colors, det, det, 0, {}, det
+        except Exception as e:
+            error_msg = f"<p style='color:#dc2626;'>Error: {str(e)[:100]}</p>"
+            return error_msg, error_msg, error_msg, error_msg, 0, {}, error_msg
 
     def handle_page2(img):
-        depth, verdict, reason, metrics = page2_classify(img)
-        return depth, verdict, reason, metrics, verdict, metrics["confidence"] if "confidence" in metrics else 0.0, metrics
+        try:
+            depth, verdict, reason, metrics = page2_classify(img)
+            return depth, verdict, reason, metrics, verdict, metrics["confidence"] if "confidence" in metrics else 0.0, metrics
+        except Exception as e:
+            error_msg = f"<p style='color:#dc2626;'>Error: {str(e)[:150]}</p>"
+            return None, error_msg, error_msg, {}, error_msg, 0.0, {}
 
     def handle_refresh(p1d, p1c, p1det, p2p, p2c, p2q):
         summary, history = page3_refresh(p1d, p1c, p1det, p2p, p2c, p2q)
@@ -367,5 +405,4 @@ if __name__ == "__main__":
         server_port=7860,
         share=False,
         show_error=True,
-        css=APP_CSS,
     )
