@@ -10,6 +10,11 @@ env/
 # Models and Data (Standard practice is to store large weights externally)
 models/*.pth
 models/*.pt
+models/*.pb
 asset/
 *.jpg
 *.png
+
+# AI Surveyor runtime artifacts (inspection DB + generated reports)
+data/
+yolov8*.pt

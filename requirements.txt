@@ -18,6 +18,15 @@ pyyaml>=6.0
 easyocr>=1.7.0
    # OCR container-number validation gate (step 0 of pipeline)
 
+# ── AI Surveyor extension (surveyor/ package) ───────────────────────────────
+reportlab>=4.0.0     # professional PDF inspection reports
+qrcode>=7.4          # QR code linking reports to inspection records
+# Optional — auto-used if present, with built-in fallbacks otherwise:
+#   sahi>=0.11        # alternative slicing backend for small-object detection
+#   (cv2.dnn_superres EDSR/FSRCNN/ESPCN .pb weights in models/ enable learned
+#    super-resolution; otherwise Lanczos upscaling is used)
+# SQLite (inspection database) ships with the Python standard library.
+
 # Install with:  pip install -r requirements.txt
 # For GPU support replace torch/torchvision lines with the CUDA wheel, e.g.:
 #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121

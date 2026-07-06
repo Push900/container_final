@@ -17,6 +17,15 @@ from PIL import Image
 
 from inference import ContainerPredictor, MODEL_PATH
 
+# AI Surveyor extension (independent modules; lazy-loaded on first use so the
+# existing three pages and app startup are unaffected).
+try:
+    import surveyor_ui
+    SURVEYOR_AVAILABLE = True
+except Exception as _surv_exc:  # pragma: no cover
+    print(f"[WARN] AI Surveyor tab unavailable: {_surv_exc}")
+    SURVEYOR_AVAILABLE = False
+
 # ── Startup & Initialization ──────────────────────────────────────────────────
 
 if not MODEL_PATH.exists():
@@ -361,6 +370,53 @@ with gr.Blocks(title="Container Intelligence System") as demo:
             gr.Markdown("### Session History")
             p3_history = gr.Textbox(label="History", lines=8, interactive=False, value="(empty)")
 
+        # ── PAGE 4: AI SURVEYOR ────────────────────────────────────────────────
+        if SURVEYOR_AVAILABLE:
+            with gr.TabItem("🔬 AI Surveyor"):
+                gr.Markdown(
+                    "Autonomous container inspection. Upload one image or several "
+                    "frames of the **same** container (different angles improve "
+                    "reliability). The AI Surveyor detects & tracks the container, "
+                    "reads and decodes the ISO number, inspects the seal, assesses "
+                    "damage, and produces a signed PDF report stored in the database."
+                )
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        surv_files = gr.Files(
+                            label="Inspection frames (1+ images of one container)",
+                            file_count="multiple", file_types=["image"],
+                        )
+                        surv_gps = gr.Textbox(label="GPS (optional, 'lat,lon')", placeholder="12.9716,77.5946")
+                        surv_btn = gr.Button("🚀 Run Full Inspection", variant="primary", size="lg")
+                        surv_best = gr.Image(label="Inspected frame", height=260, interactive=False)
+                        surv_report = gr.File(label="📄 Inspection Report (PDF)", interactive=False)
+                    with gr.Column(scale=2):
+                        surv_dashboard = gr.HTML(
+                            value="<p style='color:#999;padding:30px;text-align:center;'>"
+                                  "Upload frames and run an inspection.</p>")
+                with gr.Accordion("Surveyor Checklist & Recommendations", open=True):
+                    surv_checklist = gr.HTML()
+                with gr.Accordion("Full Inspection Record (JSON)", open=False):
+                    surv_json = gr.JSON()
+
+        # ── PAGE 5: INSPECTION HISTORY ─────────────────────────────────────────
+        if SURVEYOR_AVAILABLE:
+            with gr.TabItem("📚 Inspection History"):
+                gr.Markdown("Search the complete inspection audit trail stored in the database.")
+                with gr.Row():
+                    h_container = gr.Textbox(label="Container number")
+                    h_seal = gr.Textbox(label="Seal number")
+                    h_line = gr.Textbox(label="Shipping line")
+                    h_result = gr.Dropdown(["Any", "PASS", "FAIL", "REVIEW"], value="Any", label="Result")
+                with gr.Row():
+                    h_from = gr.Textbox(label="Date from (ISO, e.g. 2026-06-01)")
+                    h_to = gr.Textbox(label="Date to (ISO)")
+                    h_damage = gr.Textbox(label="Damage category (e.g. rust, severe)")
+                with gr.Row():
+                    h_search = gr.Button("🔍 Search", variant="primary")
+                    h_refresh = gr.Button("🔄 Show recent")
+                h_results = gr.HTML()
+
     # ── Event Handlers ────────────────────────────────────────────────────────
 
     def handle_page1(img):
@@ -397,6 +453,23 @@ with gr.Blocks(title="Container Intelligence System") as demo:
     p3_refresh_btn.click(handle_refresh, inputs=[
         p1_pred_state, p1_colors_state, p1_det_state, p2_pred_state, p2_conf_state, p2_q_state
     ], outputs=[p3_summary, p3_history])
+
+    # Page 4 & 5: AI Surveyor
+    if SURVEYOR_AVAILABLE:
+        surv_btn.click(
+            surveyor_ui.run_inspection,
+            inputs=[surv_files, surv_gps],
+            outputs=[surv_dashboard, surv_best, surv_checklist, surv_json, surv_report],
+        )
+        h_search.click(
+            surveyor_ui.search_history,
+            inputs=[h_container, h_seal, h_from, h_to, h_line, h_result, h_damage],
+            outputs=h_results,
+        )
+        h_refresh.click(
+            lambda: surveyor_ui.search_history("", "", "", "", "", "Any", ""),
+            outputs=h_results,
+        )
 
 
 if __name__ == "__main__":
