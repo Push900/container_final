@@ -96,7 +96,7 @@ def page1_analyze(image):
         # Detection HTML
         det_color = "#16a34a" if detection_result["detected"] else "#dc2626"
         det_bg = "#f0fdf4" if detection_result["detected"] else "#fef2f2"
-        det_text = "✓ CONTAINER DETECTED" if detection_result["detected"] else "✗ NOT A CONTAINER"
+        det_text = " CONTAINER DETECTED" if detection_result["detected"] else " NOT A CONTAINER"
 
         detection_html = f"""
         <div style="border:2px solid {det_color};border-radius:12px;background:{det_bg};
@@ -168,12 +168,12 @@ def page2_classify(image):
         if getattr(predictor, "_depth_loading", False):
             # Create a placeholder "Loading" image or just keep it None
             depth_out = None 
-            reasoning_prefix = "⏳ Depth Model is still loading in the background...\n\n"
+            reasoning_prefix = " Depth Model is still loading in the background...\n\n"
         elif result.get("depth_map_colored"):
             depth_out = np.array(result["depth_map_colored"])
             reasoning_prefix = ""
         else:
-            reasoning_prefix = "⚠️ Depth detection unavailable (Model failed to load).\n\n"
+            reasoning_prefix = " Depth detection unavailable (Model failed to load).\n\n"
 
         # Verdict HTML
         pred = result["prediction"]
@@ -319,18 +319,18 @@ with gr.Blocks(title="Container Intelligence System") as demo:
     p2_conf_state = gr.State(0.0)
     p2_q_state = gr.State({})
 
-    gr.Markdown("# 📦 Container Intelligence System", elem_id="app-title")
+    gr.Markdown("#  Container Intelligence System", elem_id="app-title")
 
     with gr.Tabs():
 
         # ── PAGE 1 ────────────────────────────────────────────────────────────
-        with gr.TabItem("1️⃣ Detection"):
+        with gr.TabItem("1️ Detection"):
             gr.Markdown("Upload an image to analyze for container presence, colors, and object detection.")
 
             with gr.Row():
                 with gr.Column(scale=1):
                     p1_upload = gr.Image(label="Upload Image", type="numpy", height=300)
-                    p1_btn = gr.Button("🔍 Analyse", variant="primary", size="lg")
+                    p1_btn = gr.Button(" Analyse", variant="primary", size="lg")
                 with gr.Column(scale=1):
                     p1_ocr_out = gr.HTML(value="<p style='color:#999;text-align:center;padding:40px;'>Upload image</p>")
 
@@ -339,13 +339,13 @@ with gr.Blocks(title="Container Intelligence System") as demo:
                 p1_det_out = gr.HTML(value="<p style='color:#999;text-align:center;'>Detection</p>")
 
         # ── PAGE 2 ────────────────────────────────────────────────────────────
-        with gr.TabItem("2️⃣ Classification"):
+        with gr.TabItem("2 Classification"):
             gr.Markdown("Upload a container image to classify its state (Full/Empty/Invalid) with visual explanations.")
 
             with gr.Row():
                 with gr.Column(scale=1):
                     p2_upload = gr.Image(label="Upload Container", type="numpy", height=300)
-                    p2_btn = gr.Button("🎯 Classify", variant="primary", size="lg")
+                    p2_btn = gr.Button(" Classify", variant="primary", size="lg")
                 with gr.Column(scale=1):
                     p2_depth = gr.Image(label="Depth Map (bright=near, dark=far)", type="numpy", height=300, interactive=False)
 
@@ -358,10 +358,10 @@ with gr.Blocks(title="Container Intelligence System") as demo:
                     p2_metrics_out = gr.JSON(label="Metrics")
 
         # ── PAGE 3 ────────────────────────────────────────────────────────────
-        with gr.TabItem("3️⃣ Dashboard"):
+        with gr.TabItem("3️ Dashboard"):
             gr.Markdown("Summary of results from Pages 1 & 2.")
 
-            p3_refresh_btn = gr.Button("🔄 Refresh", size="lg")
+            p3_refresh_btn = gr.Button(" Refresh", size="lg")
 
             p3_summary = gr.HTML(
                 value='<div style="padding:20px;text-align:center;color:#999;">Run analyses on Pages 1 & 2</div>'
@@ -372,7 +372,7 @@ with gr.Blocks(title="Container Intelligence System") as demo:
 
         # ── PAGE 4: AI SURVEYOR ────────────────────────────────────────────────
         if SURVEYOR_AVAILABLE:
-            with gr.TabItem("🔬 AI Surveyor"):
+            with gr.TabItem(" AI Surveyor"):
                 gr.Markdown(
                     "Autonomous container inspection. Upload one image or several "
                     "frames of the **same** container (different angles improve "
@@ -387,9 +387,9 @@ with gr.Blocks(title="Container Intelligence System") as demo:
                             file_count="multiple", file_types=["image"],
                         )
                         surv_gps = gr.Textbox(label="GPS (optional, 'lat,lon')", placeholder="12.9716,77.5946")
-                        surv_btn = gr.Button("🚀 Run Full Inspection", variant="primary", size="lg")
+                        surv_btn = gr.Button(" Run Full Inspection", variant="primary", size="lg")
                         surv_best = gr.Image(label="Inspected frame", height=260, interactive=False)
-                        surv_report = gr.File(label="📄 Inspection Report (PDF)", interactive=False)
+                        surv_report = gr.File(label=" Inspection Report (PDF)", interactive=False)
                     with gr.Column(scale=2):
                         surv_dashboard = gr.HTML(
                             value="<p style='color:#999;padding:30px;text-align:center;'>"
@@ -401,7 +401,7 @@ with gr.Blocks(title="Container Intelligence System") as demo:
 
         # ── PAGE 5: INSPECTION HISTORY ─────────────────────────────────────────
         if SURVEYOR_AVAILABLE:
-            with gr.TabItem("📚 Inspection History"):
+            with gr.TabItem(" Inspection History"):
                 gr.Markdown("Search the complete inspection audit trail stored in the database.")
                 with gr.Row():
                     h_container = gr.Textbox(label="Container number")
@@ -413,8 +413,8 @@ with gr.Blocks(title="Container Intelligence System") as demo:
                     h_to = gr.Textbox(label="Date to (ISO)")
                     h_damage = gr.Textbox(label="Damage category (e.g. rust, severe)")
                 with gr.Row():
-                    h_search = gr.Button("🔍 Search", variant="primary")
-                    h_refresh = gr.Button("🔄 Show recent")
+                    h_search = gr.Button(" Search", variant="primary")
+                    h_refresh = gr.Button(" Show recent")
                 h_results = gr.HTML()
 
     # ── Event Handlers ────────────────────────────────────────────────────────
